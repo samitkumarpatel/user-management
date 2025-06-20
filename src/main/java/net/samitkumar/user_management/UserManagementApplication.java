@@ -1,5 +1,6 @@
 package net.samitkumar.user_management;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Builder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -109,13 +110,27 @@ class RouterHandler {
 
 	public Mono<ServerResponse> fetchFilteredUser(ServerRequest request) {
 		var userName = request.queryParam("username").orElseThrow(() -> new InvalidRequestException("Username query parameter is required"));
-
 		log.info("Fetching /filter with username: {}", userName);
 		return jsonPlaceholderClient
 				.getUserByUsername(userName)
 				.defaultIfEmpty(List.of())
-				.zipWith(userRepository.findByUsernameIsLike(userName).defaultIfEmpty(List.of()),(extUser, dbUser) -> Stream.concat(addUserType(extUser, UserType.EXTERNAL), addUserType(dbUser, UserType.INTERNAL)))
-				.flatMap(ServerResponse.ok()::bodyValue);
+				.map(users -> users.isEmpty() ? User.builder().build() : users.getFirst())
+				.zipWith(userRepository.findByUsername(userName).defaultIfEmpty(User.builder().build()))
+				.flatMap(tuple -> {
+					User externalUser = tuple.getT1();
+					User dbUser = tuple.getT2();
+					if (Objects.nonNull(externalUser.id())) {
+						var externalUserBuilder = externalUser.toBuilder();
+						externalUserBuilder.type(UserType.EXTERNAL);
+						return ServerResponse.ok().bodyValue(externalUserBuilder.build());
+					} else if (Objects.nonNull(dbUser.id())) {
+						var dbUserBuilder = dbUser.toBuilder();
+						dbUserBuilder.type(UserType.INTERNAL);
+						return ServerResponse.ok().bodyValue(dbUserBuilder.build());
+					} else {
+						return ServerResponse.notFound().build();
+					}
+				});
 	}
 }
 
