@@ -1,5 +1,6 @@
 package net.samitkumar.user_management;
 
+import lombok.Builder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
@@ -9,9 +10,11 @@ import org.springframework.data.annotation.ReadOnlyProperty;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.MongoId;
 import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.support.WebClientAdapter;
 import org.springframework.web.reactive.function.server.RouterFunction;
@@ -24,6 +27,8 @@ import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
+import java.util.Objects;
 import java.util.stream.Stream;
 
 @SpringBootApplication
@@ -45,6 +50,7 @@ public class UserManagementApplication {
 		return RouterFunctions
 				.route()
 				.path("/user", builder -> builder
+						.GET("/filter", routerHandler::fetchFilteredUser)
 						.GET("",routerHandler::allUser)
 						.POST("", routerHandler::createNewUser)
 						.GET("/{id}", routerHandler::getUserById))
@@ -63,17 +69,15 @@ class RouterHandler {
 		return
 				jsonPlaceholderClient.getAllUser()
 						.collectList()
-						.zipWith(userRepository.findAll().collectList(), (u1, u2) -> {
-							log.info("Fetched {} external users and {} internal users", u1.size(), u2.size());
-							var externalUsers = u1.stream().map(user -> new User(user.id(), user.name(), user.username(), user.email(), user.address(), UserType.EXTERNAL));
-							var internalUsers = u2.stream().map(user -> new User(user.id(), user.name(), user.username(), user.email(), user.address(), UserType.INTERNAL));
-							return Stream.concat(externalUsers, internalUsers).toList();
-						})
+						.zipWith(
+								userRepository.findAll().collectList(),
+								(u1, u2) -> Stream.concat(addUserType(u1, UserType.EXTERNAL), addUserType(u2, UserType.INTERNAL)))
 						.flatMap(ServerResponse.ok()::bodyValue);
+	}
 
-		/*return Flux.merge(jsonPlaceholderClient.getAllUser(), userRepository.findAll())
-				.collectList()
-				.flatMap(ServerResponse.ok()::bodyValue);*/
+	private Stream<User> addUserType(List<User> users, UserType type) {
+		return users.stream()
+				.map(user -> new User(user.id(), user.name(), user.username(), user.email(), user.address(), type));
 	}
 
 	public Mono<ServerResponse> createNewUser(ServerRequest request) {
@@ -102,17 +106,40 @@ class RouterHandler {
 				.flatMap(user -> ServerResponse.ok().bodyValue(user))
 				.switchIfEmpty(ServerResponse.notFound().build());
 	}
+
+	public Mono<ServerResponse> fetchFilteredUser(ServerRequest request) {
+		var userName = request.queryParam("username").orElseThrow(() -> new InvalidRequestException("Username query parameter is required"));
+
+		log.info("Fetching /filter with username: {}", userName);
+		return jsonPlaceholderClient
+				.getUserByUsername(userName)
+				.defaultIfEmpty(List.of())
+				.zipWith(userRepository.findByUsernameIsLike(userName).defaultIfEmpty(List.of()),(extUser, dbUser) -> Stream.concat(addUserType(extUser, UserType.EXTERNAL), addUserType(dbUser, UserType.INTERNAL)))
+				.flatMap(ServerResponse.ok()::bodyValue);
+	}
 }
+
+@ResponseStatus(HttpStatus.BAD_REQUEST)
+class InvalidRequestException extends RuntimeException {
+	InvalidRequestException(String message) {
+		super(message);
+	}
+}
+
 enum UserType { EXTERNAL, INTERNAL;}
 
 @Document
+@Builder(toBuilder = true)
 record User(@MongoId String id, String name, String username, String email, Address address, @ReadOnlyProperty UserType type) {
 	record Address(String street, String suite, String city, String zipcode, Geo geo) {
 		record Geo(String lat, String lng) {}
 	}
 }
 
-interface UserRepository extends ReactiveMongoRepository<User, String> {}
+interface UserRepository extends ReactiveMongoRepository<User, String> {
+	Mono<User> findByUsername(String username);
+	Mono<List<User>> findByUsernameIsLike(String username);
+}
 
 @HttpExchange
 interface JsonPlaceholderClient {
@@ -123,5 +150,5 @@ interface JsonPlaceholderClient {
 	Mono<User> getUserById(@PathVariable String id);
 
 	@GetExchange("/users")
-	Mono<User> getUserByUsername(@RequestParam String username);
+	Mono<List<User>> getUserByUsername(@RequestParam String username);
 }
