@@ -1,6 +1,5 @@
 package net.samitkumar.user_management;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Builder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -72,13 +71,21 @@ class RouterHandler {
 						.collectList()
 						.zipWith(
 								userRepository.findAll().collectList(),
-								(u1, u2) -> Stream.concat(addUserType(u1, UserType.EXTERNAL), addUserType(u2, UserType.INTERNAL)))
+								(u1, u2) -> Stream.concat(
+										u1.stream().map(u -> addUserType(u, UserType.EXTERNAL)),
+										u2.stream().map(u -> addUserType(u, UserType.INTERNAL))
+								)
+						)
 						.flatMap(ServerResponse.ok()::bodyValue);
 	}
 
-	private Stream<User> addUserType(List<User> users, UserType type) {
+	private Stream<User> addUserTypeInUserStream(List<User> users, UserType type) {
 		return users.stream()
-				.map(user -> new User(user.id(), user.name(), user.username(), user.email(), user.address(), type));
+				.map(user -> user.toBuilder().type(type).build());
+	}
+
+	private User addUserType(User user, UserType type) {
+		return user.toBuilder().type(type).build();
 	}
 
 	public Mono<ServerResponse> createNewUser(ServerRequest request) {
@@ -92,13 +99,13 @@ class RouterHandler {
 		var userId = request.pathVariable("id");
 		log.info("Fetching user with ID: {}", userId);
 		Mono<User> externalUser = jsonPlaceholderClient.getUserById(userId)
-				.map(user -> new User(user.id(), user.name(), user.username(), user.email(), user.address(), UserType.EXTERNAL))
+				.map(user -> addUserType(user, UserType.EXTERNAL))
 				.doOnNext(user -> log.info("jsonPlaceholderClient User: {}", user))
 				.onErrorResume(e -> Mono.empty())
 				.switchIfEmpty(Mono.empty());
 
 		Mono<User> dbUser = userRepository.findById(userId)
-				.map(user -> new User(user.id(), user.name(), user.username(), user.email(), user.address(), UserType.INTERNAL))
+				.map(user -> addUserType(user, UserType.INTERNAL))
 				.doOnNext(user -> log.info("userRepository User: {}", user))
 				.switchIfEmpty(Mono.empty());
 
@@ -145,7 +152,8 @@ enum UserType { EXTERNAL, INTERNAL;}
 
 @Document
 @Builder(toBuilder = true)
-record User(@MongoId String id, String name, String username, String email, Address address, @ReadOnlyProperty UserType type) {
+record User(@MongoId String id, String name, String username, String email, Address address, @ReadOnlyProperty UserType type, Boolean active) {
+
 	record Address(String street, String suite, String city, String zipcode, Geo geo) {
 		record Geo(String lat, String lng) {}
 	}
