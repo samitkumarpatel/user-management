@@ -53,7 +53,9 @@ public class UserManagementApplication {
 						.GET("/filter", routerHandler::fetchFilteredUser)
 						.GET("",routerHandler::allUser)
 						.POST("", routerHandler::createNewUser)
-						.GET("/{id}", routerHandler::getUserById))
+						.GET("/{id}", routerHandler::getUserById)
+						.PUT("/{id}", routerHandler::fullUpdate)
+						.PATCH("/{id}", routerHandler::partialUpdate))
 				.build();
 	}
 }
@@ -138,6 +140,14 @@ class RouterHandler {
 						return ServerResponse.notFound().build();
 					}
 				});
+	}
+
+	public Mono<ServerResponse> fullUpdate(ServerRequest request) {
+		return null;
+	}
+
+	public Mono<ServerResponse> partialUpdate(ServerRequest request) {
+		return null;
 	}
 }
 
